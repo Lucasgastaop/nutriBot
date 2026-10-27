@@ -1,0 +1,1057 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-e5f6-4789-abcd-ef1234567890",
+    "name": "NutriBot API",
+    "description": "Collection do Projeto Diamante (NutriBot).\n\nRode no Collection Runner, **na ordem**, com a API recém-subida em http://localhost:8080.\n\nO H2 é recriado a cada inicialização (66 alimentos, perfil da Marina com 1800 kcal, refeições de hoje e de ontem). Sem reiniciar, a segunda execução quebra os testes do diário, porque o chat grava um ovo.\n\nAs pastas de chat, RAG e `/meals/analyze` chamam o modelo. Defina `OPENAI_API_KEY` antes de subir a API. Cada chamada pode levar alguns segundos.\n\nErros do contrato devem vir como `{ \"error\": \"...\" }`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "today", "value": "" },
+    { "key": "yesterday", "value": "" },
+    { "key": "tapiocaId", "value": "" },
+    { "key": "bananaId", "value": "" },
+    { "key": "createdMealId", "value": "" },
+    { "key": "conversationA", "value": "" },
+    { "key": "conversationB", "value": "" },
+    { "key": "countBeforeLog", "value": "" },
+    { "key": "countAfterLog", "value": "" }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "function localIso(date) {",
+          "    const month = String(date.getMonth() + 1).padStart(2, '0');",
+          "    const day = String(date.getDate()).padStart(2, '0');",
+          "    return date.getFullYear() + '-' + month + '-' + day;",
+          "}",
+          "const now = new Date();",
+          "pm.collectionVariables.set('today', localIso(now));",
+          "pm.collectionVariables.set('yesterday', localIso(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)));"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "01 Alimentos",
+      "item": [
+        {
+          "name": "Tabela completa",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/foods"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 e 66 alimentos', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json()).to.have.lengthOf(66);",
+                  "});",
+                  "const tapioca = pm.response.json().find(food => food.name === 'Tapioca');",
+                  "const banana = pm.response.json().find(food => food.name === 'Banana prata');",
+                  "pm.test('tapioca tem 240 kcal por 100 g', function () {",
+                  "    pm.expect(tapioca, 'Tapioca').to.be.an('object');",
+                  "    pm.expect(tapioca.calories).to.be.closeTo(240, 0.01);",
+                  "    pm.expect(tapioca.carbs).to.be.closeTo(60, 0.01);",
+                  "});",
+                  "pm.collectionVariables.set('tapiocaId', String(tapioca.id));",
+                  "pm.collectionVariables.set('bananaId', String(banana.id));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Buscar tapioca",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/foods?name=tapioca"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const foods = pm.response.json();",
+                  "pm.test('200 e só tapioca', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(foods.length).to.be.at.least(1);",
+                  "    foods.forEach(food => pm.expect(food.name.toLowerCase()).to.include('tapioca'));",
+                  "    pm.expect(foods[0].calories).to.be.closeTo(240, 0.01);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Buscar por id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/foods/{{tapiocaId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 com o mesmo alimento', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const food = pm.response.json();",
+                  "    pm.expect(food.name).to.eql('Tapioca');",
+                  "    pm.expect(food.id).to.eql(Number(pm.collectionVariables.get('tapiocaId')));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Alimento inexistente",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/foods/999999"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 no formato error', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "    pm.expect(pm.response.json().error).to.be.a('string').that.is.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 Diário e resumo iniciais",
+      "item": [
+        {
+          "name": "Refeições de hoje",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/meals"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const meals = pm.response.json();",
+                  "const names = meals.map(meal => meal.foodName);",
+                  "pm.test('200 com as 7 refeições de hoje', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(meals).to.have.lengthOf(7);",
+                  "    ['Ovo cozido', 'Pão de forma integral', 'Mamão papaia', 'Arroz integral cozido', 'Feijão preto cozido', 'Peito de frango grelhado', 'Alface'].forEach(name => pm.expect(names).to.include(name));",
+                  "    meals.forEach(meal => pm.expect(meal.date).to.eql(pm.collectionVariables.get('today')));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refeições de ontem",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/meals?date={{yesterday}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const meals = pm.response.json();",
+                  "const names = meals.map(meal => meal.foodName);",
+                  "pm.test('200 com as 5 refeições de ontem', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(meals).to.have.lengthOf(5);",
+                  "    ['Pão francês', 'Café sem açúcar', 'Arroz branco cozido', 'Feijão carioca cozido', 'Alcatra grelhada'].forEach(name => pm.expect(names).to.include(name));",
+                  "    meals.forEach(meal => pm.expect(meal.date).to.eql(pm.collectionVariables.get('yesterday')));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resumo de hoje",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/summary"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('200 com meta, consumo e saldo', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(body.date).to.eql(pm.collectionVariables.get('today'));",
+                  "    pm.expect(body.dailyCalories).to.eql(1800);",
+                  "    pm.expect(body.consumedCalories).to.be.closeTo(753.5, 1);",
+                  "    pm.expect(body.remainingCalories).to.be.closeTo(1046.5, 1);",
+                  "    pm.expect(body.meals).to.have.lengthOf(7);",
+                  "    ['consumedCalories', 'protein', 'carbs', 'fat', 'remainingCalories'].forEach(field => pm.expect(body[field]).to.be.a('number'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resumo de ontem",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/summary?date={{yesterday}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('200 do dia anterior', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(body.date).to.eql(pm.collectionVariables.get('yesterday'));",
+                  "    pm.expect(body.meals).to.have.lengthOf(5);",
+                  "    pm.expect(body.consumedCalories).to.be.above(0);",
+                  "    pm.expect(body.dailyCalories).to.eql(1800);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 Perfil",
+      "item": [
+        {
+          "name": "Ler perfil",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/profile"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Marina, emagrecimento, 1800 kcal', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const profile = pm.response.json();",
+                  "    pm.expect(profile.name).to.eql('Marina Souza');",
+                  "    pm.expect(profile.goal).to.eql('LOSE_WEIGHT');",
+                  "    pm.expect(profile.dailyCalories).to.eql(1800);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Perfil inválido",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Marina Souza\",\n  \"goal\": \"LOSE_WEIGHT\",\n  \"dailyCalories\": 100\n}"
+            },
+            "url": "{{baseUrl}}/profile"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 quando a meta é baixa demais', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "    pm.expect(pm.response.json().error).to.eql('dailyCalories must be at least 1000');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Atualizar perfil",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Marina Souza\",\n  \"goal\": \"MAINTAIN\",\n  \"dailyCalories\": 2000\n}"
+            },
+            "url": "{{baseUrl}}/profile"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 com a meta nova', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const profile = pm.response.json();",
+                  "    pm.expect(profile.goal).to.eql('MAINTAIN');",
+                  "    pm.expect(profile.dailyCalories).to.eql(2000);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Restaurar perfil",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Marina Souza\",\n  \"goal\": \"LOSE_WEIGHT\",\n  \"dailyCalories\": 1800\n}"
+            },
+            "url": "{{baseUrl}}/profile"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('perfil original de volta', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const profile = pm.response.json();",
+                  "    pm.expect(profile.name).to.eql('Marina Souza');",
+                  "    pm.expect(profile.goal).to.eql('LOSE_WEIGHT');",
+                  "    pm.expect(profile.dailyCalories).to.eql(1800);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 Escrita no diário",
+      "item": [
+        {
+          "name": "Registrar lanche",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mealType\": \"SNACK\",\n  \"foodId\": {{bananaId}},\n  \"grams\": 120\n}"
+            },
+            "url": "{{baseUrl}}/meals"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const meal = pm.response.json();",
+                  "pm.test('201 banana prata 120 g', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "    pm.expect(meal.foodName).to.eql('Banana prata');",
+                  "    pm.expect(meal.mealType).to.eql('SNACK');",
+                  "    pm.expect(meal.grams).to.be.closeTo(120, 0.01);",
+                  "    pm.expect(meal.calories).to.be.closeTo(117.6, 0.2);",
+                  "    pm.expect(meal.date).to.eql(pm.collectionVariables.get('today'));",
+                  "});",
+                  "pm.collectionVariables.set('createdMealId', String(meal.id));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lanche aparece no dia",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/meals"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const meals = pm.response.json();",
+                  "const id = Number(pm.collectionVariables.get('createdMealId'));",
+                  "pm.test('diário tem a refeição criada', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(meals).to.have.lengthOf(8);",
+                  "    pm.expect(meals.map(meal => meal.id)).to.include(id);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Remover lanche",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/meals/{{createdMealId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 sem corpo', function () {",
+                  "    pm.response.to.have.status(204);",
+                  "    pm.expect(pm.response.text()).to.eql('');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lanche sumiu",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/meals"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const meals = pm.response.json();",
+                  "const id = Number(pm.collectionVariables.get('createdMealId'));",
+                  "pm.test('volta às 7 refeições iniciais', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(meals).to.have.lengthOf(7);",
+                  "    pm.expect(meals.map(meal => meal.id)).to.not.include(id);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Gramas inválidas",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mealType\": \"SNACK\",\n  \"foodId\": {{bananaId}},\n  \"grams\": -5\n}"
+            },
+            "url": "{{baseUrl}}/meals"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 grams must be positive', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "    pm.expect(pm.response.json().error).to.eql('grams must be positive');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Alimento do diário inexistente",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mealType\": \"SNACK\",\n  \"foodId\": 999999,\n  \"grams\": 100\n}"
+            },
+            "url": "{{baseUrl}}/meals"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 food not found', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "    pm.expect(pm.response.json().error).to.be.a('string').that.is.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Apagar refeição inexistente",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/meals/999999"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 meal not found', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "    pm.expect(pm.response.json().error).to.be.a('string').that.is.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05 Chat, memória, RAG e tools",
+      "item": [
+        {
+          "name": "Memória — dizer o nome",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('conversationA', 'postman-a-' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 com answer texto', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().answer).to.be.a('string').that.is.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"conversationId\": \"{{conversationA}}\",\n  \"message\": \"Meu nome é Rafael.\"\n}"
+            },
+            "url": "{{baseUrl}}/chat"
+          }
+        },
+        {
+          "name": "Memória — perguntar o nome",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('lembra Rafael nesta conversa', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().answer).to.match(/rafael/i);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"conversationId\": \"{{conversationA}}\",\n  \"message\": \"Qual é o meu nome?\"\n}"
+            },
+            "url": "{{baseUrl}}/chat"
+          }
+        },
+        {
+          "name": "Outra conversa não herda o nome",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('conversationB', 'postman-b-' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('não responde Rafael em outro conversationId', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const answer = pm.response.json().answer;",
+                  "    pm.expect(answer).to.be.a('string').that.is.not.empty;",
+                  "    pm.expect(answer).to.not.match(/rafael/i);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"conversationId\": \"{{conversationB}}\",\n  \"message\": \"Qual é o meu nome?\"\n}"
+            },
+            "url": "{{baseUrl}}/chat"
+          }
+        },
+        {
+          "name": "Tool — calorias da tapioca",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('conversationFood', 'postman-food-' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 240 kcal da tabela', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().answer).to.match(/240/);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"conversationId\": \"{{conversationFood}}\",\n  \"message\": \"Quantas calorias tem 100 g de tapioca?\"\n}"
+            },
+            "url": "{{baseUrl}}/chat"
+          }
+        },
+        {
+          "name": "RAG — copos de água",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('conversationWater', 'postman-water-' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('10 copos, como o guia da clínica', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const answer = pm.response.json().answer.toLowerCase();",
+                  "    pm.expect(answer).to.match(/10|dez/);",
+                  "    pm.expect(answer).to.match(/copo/);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"conversationId\": \"{{conversationWater}}\",\n  \"message\": \"Quantos copos de água por dia a clínica recomenda?\"\n}"
+            },
+            "url": "{{baseUrl}}/chat"
+          }
+        },
+        {
+          "name": "RAG — horário de atendimento",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('conversationHours', 'postman-hours-' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('cita 8h e 18h da clínica', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const answer = pm.response.json().answer.toLowerCase();",
+                  "    pm.expect(answer).to.match(/8\\s?h|08h|8:00/);",
+                  "    pm.expect(answer).to.match(/18\\s?h|18:00/);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"conversationId\": \"{{conversationHours}}\",\n  \"message\": \"Qual o horário de atendimento da clínica?\"\n}"
+            },
+            "url": "{{baseUrl}}/chat"
+          }
+        },
+        {
+          "name": "Fora de nutrição",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('conversationOff', 'postman-off-' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('recusa e volta para alimentação', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const answer = pm.response.json().answer.toLowerCase();",
+                  "    pm.expect(answer).to.not.match(/^\\s*paris[.!]?\\s*$/);",
+                  "    pm.expect(answer).to.match(/nutri|alimenta|clínica|clinica/);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"conversationId\": \"{{conversationOff}}\",\n  \"message\": \"Qual é a capital da França?\"\n}"
+            },
+            "url": "{{baseUrl}}/chat"
+          }
+        },
+        {
+          "name": "Contagem antes de registrar pelo chat",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const meals = pm.response.json();",
+                  "pm.test('ainda são as 7 refeições da carga inicial', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(meals).to.have.lengthOf(7);",
+                  "});",
+                  "pm.collectionVariables.set('countBeforeLog', String(meals.length));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/meals"
+          }
+        },
+        {
+          "name": "Tool — registrar 2 ovos no café",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('conversationLog', 'postman-log-' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 confirmando o registro', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const answer = pm.response.json().answer.toLowerCase();",
+                  "    pm.expect(answer).to.match(/registr|anot|diário|diario/);",
+                  "    pm.expect(answer).to.match(/ovo/);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"conversationId\": \"{{conversationLog}}\",\n  \"message\": \"Comi 2 ovos no café. Registra essa refeição no meu diário.\"\n}"
+            },
+            "url": "{{baseUrl}}/chat"
+          }
+        },
+        {
+          "name": "Ovo entrou no diário",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const meals = pm.response.json();",
+                  "const eggs = meals.filter(meal => /ovo/i.test(meal.foodName) && meal.mealType === 'BREAKFAST');",
+                  "pm.test('há um café da manhã com ovo além da carga inicial', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(meals.length).to.be.above(Number(pm.collectionVariables.get('countBeforeLog')));",
+                  "    pm.expect(eggs.length).to.be.at.least(2);",
+                  "});",
+                  "pm.collectionVariables.set('countAfterLog', String(meals.length));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/meals"
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 Análise estruturada",
+      "item": [
+        {
+          "name": "Estimar arroz, feijão e bife",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('200 com números, não texto', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(body.items).to.be.an('array').that.is.not.empty;",
+                  "    body.items.forEach(item => {",
+                  "        pm.expect(item.food).to.be.a('string').that.is.not.empty;",
+                  "        pm.expect(item.grams).to.be.a('number');",
+                  "        pm.expect(item.calories).to.be.a('number');",
+                  "    });",
+                  "    ['totalCalories', 'protein', 'carbs', 'fat'].forEach(field => pm.expect(body[field]).to.be.a('number'));",
+                  "    pm.expect(body.totalCalories).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"arroz, feijão e um bife\"\n}"
+            },
+            "url": "{{baseUrl}}/meals/analyze"
+          }
+        },
+        {
+          "name": "Análise não grava no diário",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('quantidade de refeições não mudou', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json()).to.have.lengthOf(Number(pm.collectionVariables.get('countAfterLog')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/meals"
+          }
+        },
+        {
+          "name": "Descrição vazia",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 description is required', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "    pm.expect(pm.response.json().error).to.eql('description is required');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"   \"\n}"
+            },
+            "url": "{{baseUrl}}/meals/analyze"
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 Erros do chat",
+      "item": [
+        {
+          "name": "Chat sem corpo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 com error', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "    pm.expect(pm.response.json().error).to.be.a('string').that.is.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{}" },
+            "url": "{{baseUrl}}/chat"
+          }
+        },
+        {
+          "name": "Chat sem message",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 message is required', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "    pm.expect(pm.response.json().error).to.eql('message is required');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"conversationId\": \"postman-erro\"\n}"
+            },
+            "url": "{{baseUrl}}/chat"
+          }
+        },
+        {
+          "name": "Chat sem conversationId",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 conversationId is required', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "    pm.expect(pm.response.json().error).to.eql('conversationId is required');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Oi\"\n}"
+            },
+            "url": "{{baseUrl}}/chat"
+          }
+        }
+      ]
+    }
+  ]
+}

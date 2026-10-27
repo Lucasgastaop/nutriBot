@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: nutribot
+
+  datasource:
+    url: jdbc:h2:mem:nutribot
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    open-in-view: false
+
+  # Ollama local, no mesmo esquema do projeto anterior. Nenhuma chave vai para o repositório.
+  # O Spring AI 2 acrescenta /chat/completions e /embeddings nesta URL.
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:ollama}
+      base-url: ${OPENAI_BASE_URL:http://localhost:11434/v1}
+      chat:
+        options:
+          model: ${OPENAI_MODEL:llama3.2}
+      embedding:
+        options:
+          model: ${OPENAI_EMBEDDING_MODEL:nomic-embed-text}
+
+server:
+  port: 8080
