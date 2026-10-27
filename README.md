@@ -10,7 +10,9 @@ O enunciado completo e os critérios de avaliação estão no deck da atividade.
 
 | Nome | RM |
 |---|---|
-| PREENCHER | PREENCHER |
+| Lucas Silva Gastão Pinheiro | RM563960 |
+| Geovanne Coneglian Passos | RM562673 |
+| Guilherme Soares de Almeida | RM563143 |
 
 ## Modelo
 
